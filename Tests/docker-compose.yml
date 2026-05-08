@@ -1,0 +1,65 @@
+# Local RocketChat stack for integration testing
+# Usage: docker compose up -d --wait
+# Default admin credentials: admin / Test1234! (see environment section)
+
+services:
+    rocketchat:
+        image: rocket.chat:latest
+        restart: unless-stopped
+        environment:
+            MONGO_URL: "mongodb://mongo:27017/rocketchat"
+            MONGO_OPLOG_URL: "mongodb://mongo:27017/local"
+            ROOT_URL: "http://localhost:3100"
+            PORT: "3100"
+            DEPLOY_METHOD: "docker"
+            # Create an initial admin account automatically
+            ADMIN_USERNAME: "rc_admin"
+            ADMIN_PASS: "Test1234!"
+            ADMIN_EMAIL: "admin@localhost.test"
+            OVERWRITE_SETTING_Show_Setup_Wizard: "completed"
+        ports:
+            - "3100:3100"
+        depends_on:
+            mongo:
+                condition: service_healthy
+        healthcheck:
+            test:
+                [
+                    "CMD",
+                    "node",
+                    "-e",
+                    "require('http').get('http://127.0.0.1:3100/api/info', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))",
+                ]
+            interval: 10s
+            timeout: 10s
+            retries: 30
+            start_period: 90s
+
+    mongo:
+        image: mongo:7.0.21
+        restart: unless-stopped
+        command: mongod --replSet rs0 --oplogSize 128
+        volumes:
+            - mongo-data:/data/db
+        healthcheck:
+            test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+            interval: 10s
+            timeout: 5s
+            retries: 10
+            start_period: 20s
+
+    # One-shot container that initialises the MongoDB replica set.
+    # Guards against "already initialized" on restarts by checking rs.status() first.
+    mongo-init-replica:
+        image: mongo:7.0.21
+        restart: no
+        depends_on:
+            mongo:
+                condition: service_healthy
+        command: >
+            mongosh --host mongo --eval
+            "try { rs.status(); print('Replica set already initialised, skipping.'); }
+             catch(e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongo:27017' }] }); print('Replica set initialised.'); }"
+
+volumes:
+    mongo-data:
